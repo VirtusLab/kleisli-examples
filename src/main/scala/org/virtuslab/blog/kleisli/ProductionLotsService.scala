@@ -4,46 +4,60 @@ import java.util.Date
 
 class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) {
   def startProductionOf(productionLotId: Long, productionStartDate: Date, workerId: Long): Unit = {
-    val productionLot = productionLotsRepository.findExistingById(productionLotId)
+    val verify: ProductionLot => ProductionLot = { productionLot =>
+      verifyWorkerCanBeAssignedToProductionLot(productionLot, workerId)
+      productionLot
+    }
 
-    verifyWorkerCanBeAssignedToProductionLot(productionLot, workerId)
-
-    val productionLotWithProductionStartData = productionLot.copy(
+    val copy: ProductionLot => ProductionLot = _.copy(
       productionStartDate = Some(productionStartDate),
       workerId = Some(workerId),
       status = ProductionLotStatus.InProduction
     )
 
-    productionLotsRepository.save(productionLotWithProductionStartData)
+    val startProductionOfF = productionLotsRepository.findExistingById _ andThen
+      verify andThen
+      copy andThen
+      productionLotsRepository.save
+
+    startProductionOfF(productionLotId)
   }
 
   def changeAssignedWorker(productionLotId: Long, newWorkerId: Long): Unit = {
-    val productionLot = productionLotsRepository.findExistingById(productionLotId)
+    val verify: ProductionLot => ProductionLot = { productionLot =>
+      verifyWorkerChange(productionLot, newWorkerId)
+      productionLot
+    }
 
-    verifyWorkerChange(productionLot, newWorkerId)
+    val copy: ProductionLot => ProductionLot = _.copy(workerId = Some(newWorkerId))
 
-    val updatedProductionLot = productionLot.copy(workerId = Some(newWorkerId))
+    val changedAssignedWorkerF = productionLotsRepository.findExistingById _ andThen
+                              verify andThen
+                              copy andThen
+                              productionLotsRepository.save
 
-    productionLotsRepository.save(updatedProductionLot)
+    changedAssignedWorkerF(productionLotId)
   }
 
   def revokeProductionLotTo(productionLotId: Long,
                             productionLotStatus: ProductionLotStatus.Value): Unit = {
-    val productionLot = productionLotsRepository.findExistingById(productionLotId)
-
-    val revokedProductionLot = productionLot.copy(
+    val copy: ProductionLot => ProductionLot = _.copy(
       status = productionLotStatus,
       workerId = None,
       productionStartDate = None,
       productionEndDate = None
     )
 
-    productionLotsRepository.save(revokedProductionLot)
+    val revokeProductionLotToF = productionLotsRepository.findExistingById _ andThen
+                                 copy andThen
+                                 productionLotsRepository.save
+
+    revokeProductionLotToF(productionLotId)
   }
 
   private def verifyWorkerChange(productionLot: ProductionLot, newWorkerId: Long): Unit = {
     require(productionLot.workerId.isDefined && productionLot.workerId.get != newWorkerId,
-            s"Production lot worker expected to be defined and different than $newWorkerId")
+      s"Production lot worker expected to be defined and different than $newWorkerId")
   }
 
   private def verifyWorkerCanBeAssignedToProductionLot(productionLot: ProductionLot, workerId: Long): Unit = {
