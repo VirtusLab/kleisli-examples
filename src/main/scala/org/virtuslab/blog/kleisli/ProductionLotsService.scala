@@ -6,13 +6,17 @@ import org.virtuslab.blog.kleisli.Arrow._
 
 class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) {
 
-  private def productionLotArrow[Env](verify: (ProductionLot, Env) => Unit, copy: (ProductionLot, Env) => ProductionLot): (Long, Env) => Long =
+  private def productionLotArrow[Env](verify: (ProductionLot, Env) => Unit,
+                                      copy: (ProductionLot, Env) => ProductionLot): (Long, Env) => Long = {
+    val verifyProductionLotNotDoneF: ((ProductionLot, Env)) => Unit = { case (pl, _) => verifyProductionLotNotDone(pl) }
+
     Function.untupled(
       (productionLotsRepository.findExistingById _ *** identity[Env])
-        >>> (verify.tupled
+        >>> ((verify.tupled &&& verifyProductionLotNotDoneF)
           &&& (copy.tupled >>> productionLotsRepository.save))
           >>> (_._2)
     )
+  }
 
   private case class StartProduction(productionStartDate: Date, workerId: Long)
   private val startProductionA = productionLotArrow[StartProduction] (
@@ -46,6 +50,9 @@ class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) 
   def revokeProductionLotTo(productionLotId: Long,
                             productionLotStatus: ProductionLotStatus.Value): Unit =
     revokeToA(productionLotId, productionLotStatus)
+
+  private def verifyProductionLotNotDone(productionLot: ProductionLot): Unit =
+    require(productionLot.status != ProductionLotStatus.Done, "Attempt to operate on finished production lot")
 
   private def verifyWorkerChange(productionLot: ProductionLot, newWorkerId: Long): Unit = {
     require(productionLot.workerId.isDefined && productionLot.workerId.get != newWorkerId,
