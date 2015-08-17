@@ -51,18 +51,14 @@ class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) 
                             productionLotStatus: ProductionLotStatus.Value): Unit =
     revokeToA(productionLotId, productionLotStatus)
 
-  private def verifyProductionLotNotDone(productionLot: ProductionLot): Unit =
-    require(productionLot.status != ProductionLotStatus.Done, "Attempt to operate on finished production lot")
+  private def verifyProductionLotNotDone(productionLot: ProductionLot): Either[Error, ProductionLot] =
+    Either.cond(productionLot.status != ProductionLotStatus.Done, productionLot, ProductionLotClosedError(productionLot))
 
-  private def verifyWorkerChange(productionLot: ProductionLot, newWorkerId: Long): Unit = {
-    require(productionLot.workerId.isDefined && productionLot.workerId.get != newWorkerId,
-      s"Production lot worker expected to be defined and different than $newWorkerId")
-  }
+  private def verifyWorkerChange(productionLot: ProductionLot, newWorkerId: Long): Either[Error, ProductionLot] =
+    productionLot.workerId.fold[Either[Error, ProductionLot]](
+      Left(NoWorkerError(productionLot)))(
+        workerId => Either.cond(workerId != newWorkerId, productionLot, SameWorkerError(productionLot)))
 
-  private def verifyWorkerCanBeAssignedToProductionLot(productionLot: ProductionLot, workerId: Long): Unit = {
-    val productionLotId = productionLot.id.get
-    val productionLotHasNoWorkerAssigned = productionLot.workerId.isEmpty
-
-    require(productionLotHasNoWorkerAssigned, s"Production lot: $productionLotId has worker already assigned")
-  }
+  private def verifyWorkerCanBeAssignedToProductionLot(productionLot: ProductionLot, workerId: Long): Either[Error, ProductionLot] =
+    Either.cond(productionLot.workerId.isEmpty, productionLot, WorkerAlreadyAssignedError(productionLot))
 }
