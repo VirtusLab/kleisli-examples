@@ -27,4 +27,6 @@ final class ArrowOps[=>:[_, _], A, B](val self: A =>: B)(implicit val arr: Arrow
 
 object Arrow extends ArrowInstances {
   implicit def ToArrowOps[F[_, _], A, B](v: F[A, B])(implicit arr: Arrow[F]): ArrowOps[F, A, B] = new ArrowOps(v)
+  implicit def ToArrowOpsFromKleisliLike[G[_], F[G[_], _, _], A, B](v: F[G, A, B])(implicit arr: Arrow[({ type λ[α, β] = F[G, α, β] })#λ]) =
+    new ArrowOps[({ type λ[α, β] = F[G, α, β] })#λ, A, B](v)
 }
