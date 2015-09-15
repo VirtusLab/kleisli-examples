@@ -13,6 +13,8 @@ trait Arrow[=>:[_, _]] {
 
   def merge[A, B, C, D](f: A =>: B, g: C =>: D): (A, C) =>: (B, D) = compose(first(f), second(g))
   def split[A, B, C](fab: A =>: B, fac: A =>: C): A =>: (B, C) = compose(merge(fab, fac), arr((x: A) => (x, x)))
+
+  def tee[A, B](f: A =>: B, action: A => Unit): A =>: B = compose(arr((x: (B, Unit)) => x._1), split(f, arr(action)))
 }
 
 final class ArrowOps[=>:[_, _], A, B](val self: A =>: B)(implicit val arr: Arrow[=>:]) {
@@ -23,6 +25,8 @@ final class ArrowOps[=>:[_, _], A, B](val self: A =>: B)(implicit val arr: Arrow
   def ***[C, D](g: C =>: D): (A, C) =>: (B, D) = arr.merge(self, g)
 
   def &&&[C](fac: A =>: C): A =>: (B, C) = arr.split(self, fac)
+
+  def -|(action: B => Unit): A =>: B = >>>(arr.tee(arr.id, action))
 }
 
 object Arrow extends ArrowInstances {
