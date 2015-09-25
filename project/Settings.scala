@@ -31,7 +31,6 @@ object Settings {
     organizationName := "VirtusLab",
     version := "1.0",
     scalaVersion := "2.11.7",
-    scalacOptions ++= compilerOptions,
-    resolvers += Resolver.typesafeRepo("releases")
+    scalacOptions ++= compilerOptions
   ) ++ scalariformSettings
 }
