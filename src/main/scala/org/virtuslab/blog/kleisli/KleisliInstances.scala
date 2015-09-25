@@ -4,7 +4,7 @@ import scala.language.higherKinds
 
 trait KleisliInstances {
   //kleisli (a => m b) is arrow
-  abstract class KleisliArrow[M[_]] extends Arrow[({ type λ[α, β] = Kleisli[M, α, β] })#λ] {
+  abstract class KleisliArrow[M[_]] extends Arrow[Kleisli[M, ?, ?]] {
     import Kleisli._
     import Monad._
 
