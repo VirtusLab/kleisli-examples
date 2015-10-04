@@ -27,10 +27,14 @@ final class ArrowOps[=>:[_, _], A, B](val self: A =>: B)(implicit val arr: Arrow
   def &&&[C](fac: A =>: C): A =>: (B, C) = arr.split(self, fac)
 
   def -|(action: B => Unit): A =>: B = >>>(arr.tee(arr.id, action))
+
+  def lift[F[_[_, _], _, _]](implicit t: ArrowTransformer[F]): F[=>:, A, B] = t.lift[=>:, A, B](self)
 }
 
 object Arrow extends ArrowInstances {
   implicit def ToArrowOps[F[_, _], A, B](v: F[A, B])(implicit arr: Arrow[F]): ArrowOps[F, A, B] = new ArrowOps(v)
   implicit def ToArrowOpsFromKleisliLike[G[_], F[_[_], _, _], A, B](v: F[G, A, B])(implicit arr: Arrow[F[G, ?, ?]]) =
     new ArrowOps[F[G, ?, ?], A, B](v)
+  implicit def ToArrowOpsFromReaderTLike[G[_, _], F[_, _[_, _], _, _], A, B, C](v: F[A, G, B, C])(implicit arr: Arrow[F[A, G, ?, ?]]) =
+    new ArrowOps[F[A, G, ?, ?], B, C](v)
 }
