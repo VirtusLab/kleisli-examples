@@ -2,20 +2,22 @@ package org.virtuslab.blog.kleisli
 
 import java.util.Date
 
-import org.virtuslab.blog.kleisli.Arrow._
+import Kleisli._
+import Arrow._
+import Monad._
 
 class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) {
+  type E[R] = Either[Error, R]
 
-  private def productionLotArrow[Env](verify: (ProductionLot, Env) => Unit,
-                                      copy: (ProductionLot, Env) => ProductionLot): (Long, Env) => Long = {
-    val verifyProductionLotNotDoneF: ((ProductionLot, Env)) => Unit = { case (pl, _) => verifyProductionLotNotDone(pl) }
+  private def productionLotArrow[Env](verify: (ProductionLot, Env) => E[ProductionLot],
+                                      copy: (ProductionLot, Env) => ProductionLot): Env => Long => E[Long] = {
+    val verifyProductionLotNotDoneF: (ProductionLot) => E[ProductionLot] = verifyProductionLotNotDone
 
-    Function.untupled(
-      (productionLotsRepository.findExistingById _ *** identity[Env])
-        >>> ((verify.tupled &&& verifyProductionLotNotDoneF)
-          &&& (copy.tupled >>> productionLotsRepository.save))
-          >>> (_._2)
-    )
+    (env: Env) => (
+      Kleisli[E, Long, ProductionLot]{ productionLotsRepository.findExistingById }
+      >>> Kleisli { verify(_, env) }
+      >>> Kleisli { verifyProductionLotNotDoneF }
+    ).map(copy(_, env)) >==> productionLotsRepository.save _
   }
 
   private case class StartProduction(productionStartDate: Date, workerId: Long)
@@ -28,17 +30,17 @@ class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) 
     )
   )
 
-  def startProductionOf(productionLotId: Long, productionStartDate: Date, workerId: Long): Unit =
-    startProductionA(productionLotId, StartProduction(productionStartDate, workerId))
+  def startProductionOf(productionLotId: Long, productionStartDate: Date, workerId: Long): Either[Error, Long] =
+    startProductionA(StartProduction(productionStartDate, workerId))(productionLotId)
 
   private val changeWorkerA = productionLotArrow[Long] (verifyWorkerChange, (pl, id) => pl.copy(workerId = Some(id)))
 
-  def changeAssignedWorker(productionLotId: Long, newWorkerId: Long): Unit =
-    changeWorkerA(productionLotId, newWorkerId)
+  def changeAssignedWorker(productionLotId: Long, newWorkerId: Long): Either[Error, Long] =
+    changeWorkerA(newWorkerId)(productionLotId)
 
   private val revokeToA =
     productionLotArrow[ProductionLotStatus.Value] (
-      (_, _) => (),
+      (pl, _) => Right(pl),
       (pl, status) => pl.copy(
         status = status,
         workerId = None,
@@ -48,8 +50,8 @@ class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) 
     )
 
   def revokeProductionLotTo(productionLotId: Long,
-                            productionLotStatus: ProductionLotStatus.Value): Unit =
-    revokeToA(productionLotId, productionLotStatus)
+                            productionLotStatus: ProductionLotStatus.Value): Either[Error, Long] =
+    revokeToA(productionLotStatus)(productionLotId)
 
   private def verifyProductionLotNotDone(productionLot: ProductionLot): Either[Error, ProductionLot] =
     Either.cond(productionLot.status != ProductionLotStatus.Done, productionLot, ProductionLotClosedError(productionLot))
