@@ -7,6 +7,7 @@ import Kleisli._
 import Arrow._
 import Monad._
 import Choice._
+import ReaderT._
 
 import scala.language.higherKinds
 import scala.util.{ Success, Failure, Try }
@@ -16,28 +17,38 @@ class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) 
 
   private def productionLotArrow[Env](verify: (ProductionLot, Env) => Either[Error, ProductionLot],
                                       copy: (ProductionLot, Env) => ProductionLot,
-                                      log: (ProductionLot, Env) => Unit): Env => Long => Either[Error, Long] = {
-    type Track[T] = Either[Error, T]
-    def track[A, B](f: A => Track[B]) = Kleisli[Track, A, B](f)
+                                      log: (ProductionLot, Env) => Unit): (Long, Env) => Either[Error, Long] = {
+    type ErrorOr[T] = Either[Error, T]
+    type Track[A, B] = Kleisli[ErrorOr, A, B]
+    type EnvReader[A[_, _], B, C] = ReaderT[Env, A, B, C]
+    type TrackWithEnv[A, B] = EnvReader[Track, A, B]
 
-    val getFromDb = track { productionLotsRepository.findExistingById }
-    val validate = (env: Env) => track { verify(_: ProductionLot, env) } >>> track { verifyProductionLotNotDone }
-    val save = Kleisli { productionLotsRepository.save } transform new (Try ~> Track) {
-      override def apply[A](fa: Try[A]): Track[A] = fa match {
-        case Success(a)  => Right(a)
-        case Failure(ex) => Left(ProductionLotUpdateError(ex))
+    def track[A, B](f: A => ErrorOr[B]) = Kleisli[ErrorOr, A, B](f)
+
+    val getFromDb: TrackWithEnv[Long, ProductionLot] =
+      track{ productionLotsRepository.findExistingById }.lift[EnvReader]
+    val validate: TrackWithEnv[ProductionLot, ProductionLot] = ReaderT[Env, Track, ProductionLot, ProductionLot](
+      track { verify.tupled } >>> track { verifyProductionLotNotDone })
+    val save = {
+      val toErrorOr = new (Try ~> ErrorOr) {
+        override def apply[A](fa: Try[A]): ErrorOr[A] = fa match {
+          case Success(a)  => Right(a)
+          case Failure(ex) => Left(ProductionLotUpdateError(ex))
+        }
       }
+      Kleisli { productionLotsRepository.save } transform toErrorOr
     }
 
     val logError: Error => Unit = error => logger.warning(s"Cannot perform operation on production lot: $error")
     val logSuccess: Long => Unit = id => logger.fine(s"Production lot $id updated")
 
-    (env: Env) =>
-      ((
-        getFromDb -| (log(_, env))
-        >>> validate(env)).map(copy(_, env))
-        >>> save)
-        .run -| (logError ||| logSuccess)
+    Function.untupled(((
+      getFromDb -| log
+      >>> validate
+      >>> returnR).map(copy.tupled)
+      >>> save)
+      .run -| (logError ||| logSuccess)
+    )
   }
 
   private case class StartProduction(productionStartDate: Date, workerId: Long)
@@ -52,14 +63,14 @@ class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) 
   )
 
   def startProductionOf(productionLotId: Long, productionStartDate: Date, workerId: Long): Either[Error, Long] =
-    startProductionA(StartProduction(productionStartDate, workerId))(productionLotId)
+    startProductionA(productionLotId, StartProduction(productionStartDate, workerId))
 
   private val changeWorkerA = productionLotArrow[Long] (verifyWorkerChange,
     (pl, id) => pl.copy(workerId = Some(id)),
     (pl, id) => logger.fine(s"Changing worker of $pl to $id"))
 
   def changeAssignedWorker(productionLotId: Long, newWorkerId: Long): Either[Error, Long] =
-    changeWorkerA(newWorkerId)(productionLotId)
+    changeWorkerA(productionLotId, newWorkerId)
 
   private val revokeToA =
     productionLotArrow[ProductionLotStatus.Value] (
@@ -75,7 +86,7 @@ class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) 
 
   def revokeProductionLotTo(productionLotId: Long,
                             productionLotStatus: ProductionLotStatus.Value): Either[Error, Long] =
-    revokeToA(productionLotStatus)(productionLotId)
+    revokeToA(productionLotId, productionLotStatus)
 
   private def verifyProductionLotNotDone(productionLot: ProductionLot): Either[Error, ProductionLot] =
     Either.cond(productionLot.status != ProductionLotStatus.Done, productionLot, ProductionLotClosedError(productionLot))
