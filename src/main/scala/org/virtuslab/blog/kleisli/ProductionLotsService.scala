@@ -7,17 +7,20 @@ import Arrow._
 import Monad._
 
 class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) {
-  type E[R] = Either[Error, R]
 
-  private def productionLotArrow[Env](verify: (ProductionLot, Env) => E[ProductionLot],
-                                      copy: (ProductionLot, Env) => ProductionLot): Env => Long => E[Long] = {
-    val verifyProductionLotNotDoneF: (ProductionLot) => E[ProductionLot] = verifyProductionLotNotDone
+  private def productionLotArrow[Env](verify: (ProductionLot, Env) => Either[Error, ProductionLot],
+                                      copy: (ProductionLot, Env) => ProductionLot): Env => Long => Either[Error, Long] = {
+    type Track[T] = Either[Error, T]
+    def track[A, B](f: A => Track[B]) = Kleisli[Track, A, B](f)
+
+    val getFromDb = track { productionLotsRepository.findExistingById }
+    val validate = (env: Env) => track { verify(_: ProductionLot, env) } >>> track { verifyProductionLotNotDone }
+    val save = track { productionLotsRepository.save }
 
     (env: Env) => (
-      Kleisli[E, Long, ProductionLot]{ productionLotsRepository.findExistingById }
-      >>> Kleisli { verify(_, env) }
-      >>> Kleisli { verifyProductionLotNotDoneF }
-    ).map(copy(_, env)) >==> productionLotsRepository.save _
+      getFromDb
+      >>> validate(env)
+    ).map(copy(_, env)) >>> save
   }
 
   private case class StartProduction(productionStartDate: Date, workerId: Long)
