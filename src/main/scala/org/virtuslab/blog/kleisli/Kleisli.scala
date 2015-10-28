@@ -21,6 +21,7 @@ final case class Kleisli[M[_], A, B](run: A => M[B]) {
   def composeK[C](k: C => M[A])(implicit m: Monad[M]): Kleisli[M, C, B] = this <==< k
 
   def map[C](f: B ⇒ C)(implicit m: Monad[M]): Kleisli[M, A, C] = Kleisli((a: A) => m.fmap(this(a))(f))
+  def liftM[N[_]](implicit n: Monad[N]): Kleisli[N, A, M[B]] = Kleisli((a: A) => n.point(this(a)))
 }
 
 object Kleisli extends KleisliInstances {
