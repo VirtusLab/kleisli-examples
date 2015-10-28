@@ -16,25 +16,27 @@ class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) 
 
   private def productionLotArrow[Env](verify: (ProductionLot, Env) => Either[Error, ProductionLot],
                                       copy: (ProductionLot, Env) => ProductionLot,
-                                      log: (ProductionLot, Env) => Unit): Env => Long => Either[Error, Try[Long]] = {
+                                      log: (ProductionLot, Env) => Unit): Env => Long => Either[Error, Long] = {
     type Track[T] = Either[Error, T]
     def track[A, B](f: A => Track[B]) = Kleisli[Track, A, B](f)
 
     val getFromDb = track { productionLotsRepository.findExistingById }
     val validate = (env: Env) => track { verify(_: ProductionLot, env) } >>> track { verifyProductionLotNotDone }
-    val save = Kleisli { productionLotsRepository.save }
+    val save = Kleisli { productionLotsRepository.save } transform new (Try ~> Track) {
+      override def apply[A](fa: Try[A]): Track[A] = fa match {
+        case Success(a)  => Right(a)
+        case Failure(ex) => Left(ProductionLotUpdateError(ex))
+      }
+    }
 
     val logError: Error => Unit = error => logger.warning(s"Cannot perform operation on production lot: $error")
-    val logSuccess: Try[Long] => Unit = {
-      case Success(id) => logger.fine(s"Production lot $id updated")
-      case Failure(ex) => logger.warning(s"Save error: $ex")
-    }
+    val logSuccess: Long => Unit = id => logger.fine(s"Production lot $id updated")
 
     (env: Env) =>
       ((
         getFromDb -| (log(_, env))
         >>> validate(env)).map(copy(_, env))
-        >>> save.liftM[Track])
+        >>> save)
         .run -| (logError ||| logSuccess)
   }
 
@@ -49,14 +51,14 @@ class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) 
     (pl, env) => logger.fine(s"Starting production of $pl on ${env.productionStartDate} by ${env.workerId}")
   )
 
-  def startProductionOf(productionLotId: Long, productionStartDate: Date, workerId: Long): Either[Error, Try[Long]] =
+  def startProductionOf(productionLotId: Long, productionStartDate: Date, workerId: Long): Either[Error, Long] =
     startProductionA(StartProduction(productionStartDate, workerId))(productionLotId)
 
   private val changeWorkerA = productionLotArrow[Long] (verifyWorkerChange,
     (pl, id) => pl.copy(workerId = Some(id)),
     (pl, id) => logger.fine(s"Changing worker of $pl to $id"))
 
-  def changeAssignedWorker(productionLotId: Long, newWorkerId: Long): Either[Error, Try[Long]] =
+  def changeAssignedWorker(productionLotId: Long, newWorkerId: Long): Either[Error, Long] =
     changeWorkerA(newWorkerId)(productionLotId)
 
   private val revokeToA =
@@ -72,7 +74,7 @@ class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) 
     )
 
   def revokeProductionLotTo(productionLotId: Long,
-                            productionLotStatus: ProductionLotStatus.Value): Either[Error, Try[Long]] =
+                            productionLotStatus: ProductionLotStatus.Value): Either[Error, Long] =
     revokeToA(productionLotStatus)(productionLotId)
 
   private def verifyProductionLotNotDone(productionLot: ProductionLot): Either[Error, ProductionLot] =
