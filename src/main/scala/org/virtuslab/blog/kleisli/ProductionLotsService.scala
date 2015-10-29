@@ -23,7 +23,7 @@ class ProductionLotsService(productionLotsRepository: ProductionLotsRepository) 
     type EnvReader[A[_, _], B, C] = ReaderT[Env, A, B, C]
     type TrackWithEnv[A, B] = EnvReader[Track, A, B]
 
-    def track[A, B](f: A => ErrorOr[B]) = Kleisli[ErrorOr, A, B](f)
+    def track[A, B](f: A => ErrorOr[B]) = Kleisli(f)
 
     val getFromDb: TrackWithEnv[Long, ProductionLot] =
       track{ productionLotsRepository.findExistingById }.lift[EnvReader]
